@@ -1,0 +1,7 @@
+contrast,n_padj_0.1
+A: Pre PRCR vs PD,223
+B: On vs Pre (all paired),44
+C: On vs Pre in PRCR,3582
+C: On vs Pre in SD,28
+C: On vs Pre in PD,0
+C: interaction PRCR - PD,1721
