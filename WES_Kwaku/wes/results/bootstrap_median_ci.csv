@@ -1,0 +1,13 @@
+"measure","group","n","median","lo","hi"
+"baseline_nonsyn_mutations","PRCR",15,217,99,852
+"baseline_nonsyn_mutations","SD",23,214,29,428
+"baseline_nonsyn_mutations","PD",30,162,91.5,253.5
+"baseline_nonsyn_mutations","PRCR minus PD",NA,55,-94.5,393.025
+"contraction_fraction","PRCR",9,0.913793103448276,0.56,0.960106382978723
+"contraction_fraction","SD",13,0.260869565217391,0.0820332159033719,0.653846153846154
+"contraction_fraction","PD",19,0.0880829015544041,0.0661896243291592,0.142307692307692
+"contraction_fraction","PRCR minus PD",NA,0.825710201893872,0.47522491349481,0.877789820710834
+"neoantigen_obs_exp_ratio","PRCR",9,0.42857142844898,0.324929971925084,0.630630630616427
+"neoantigen_obs_exp_ratio","SD",13,1.00991189438435,0.926039904898224,1.07692307692308
+"neoantigen_obs_exp_ratio","PD",19,1.02857142827755,0.97217066648507,1.07565620181907
+"neoantigen_obs_exp_ratio","PRCR minus PD",NA,-0.59999999982857,-0.703758552665076,-0.401264303696023

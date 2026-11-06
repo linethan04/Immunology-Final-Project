@@ -1,0 +1,11 @@
+# Authors' repository and nrstats, downloaded by wes/setup.R
+external/
+
+# R session and plotting leftovers
+.Rhistory
+.RData
+.Rproj.user/
+Rplots.pdf
+
+# Office lock files
+~$*

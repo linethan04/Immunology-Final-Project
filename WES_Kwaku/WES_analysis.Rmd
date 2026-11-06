@@ -1,0 +1,278 @@
+---
+title: "WES in nivolumab-treated melanoma: a reanalysis of Riaz et al. (2017)"
+author: "Kwaku Darkwah (WES lead) · Group: Krithika (TCR), Ethan (RNA), Kwaku (WES)"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 9, fig.height = 5.5)
+# All paths are relative to the repository root, where this file lives
+knitr::opts_knit$set(root.dir = normalizePath('.', winslash = '/'))
+```
+
+**Analysis by:** Kwaku Darkwah (whole exome sequencing).
+**Source:** Riaz et al., *Cell* 2017, [DOI 10.1016/j.cell.2017.09.028](https://doi.org/10.1016/j.cell.2017.09.028);
+code and processed data from [riazn/bms038_analysis](https://github.com/riazn/bms038_analysis).
+
+# Background
+
+**Nivolumab** is an antibody that blocks PD-1, a brake on T cells. Tumors press that brake to
+hide from the immune system; releasing it lets T cells attack. It works in only some melanoma
+patients.
+
+**Whole exome sequencing (WES)** reads the protein-coding 1–2% of the genome (the exome) at
+high depth. Sequencing the tumor and the patient's normal blood separates mutations the cancer
+acquired (somatic) from inherited ones. From somatic mutations we get:
+
+1. **Mutation burden:** the number of nonsynonymous (protein-changing) mutations.
+2. **Neoantigens:** mutated peptides predicted to bind the patient's HLA molecules, which T cells can recognise.
+3. **Change on treatment:** comparing the biopsy before treatment with one taken about 4 weeks in.
+
+**Question:** when nivolumab works, do tumors lose their mutations? Response groups are
+PR/CR (partial or complete response), SD (stable disease) and PD (progressive disease).
+
+# Setup
+
+Downloads the authors' repository at the exact commit used here, extracts their `nrstats`
+helper package, and installs missing CRAN packages. This only runs the first time.
+
+```{r download}
+commit <- '137111c38a32f8626ee6a436e14ac667bd31b1e7'
+root <- normalizePath('.', winslash = '/')
+ext <- file.path(root, 'external')
+repo_dir <- file.path(ext, 'bms038_analysis')
+dir.create(ext, showWarnings = FALSE)
+if (!dir.exists(repo_dir)) {
+  stopifnot(system2('git', c('clone', 'https://github.com/riazn/bms038_analysis.git', repo_dir)) == 0)
+}
+stopifnot(system2('git', c('-C', repo_dir, 'checkout', '--quiet', commit)) == 0)
+# nrstats is only used for its survival plotting functions, so extract rather than install
+if (!dir.exists(file.path(ext, 'nrstats'))) {
+  untar(file.path(repo_dir, 'packages', 'nrstats_0.1.0.tar.gz'), exdir = ext)
+}
+pkgs <- c('ggplot2', 'survival', 'RColorBrewer', 'ks')
+missing <- pkgs[!pkgs %in% rownames(installed.packages())]
+if (length(missing)) install.packages(missing, repos = 'https://cloud.r-project.org')
+```
+
+```{r helpers}
+library(survival); library(ggplot2)
+repo <- paste0(repo_dir, '/')
+out <- paste0(root, '/wes/results/')
+dir.create(paste0(out, 'original_figures'), showWarnings = FALSE, recursive = TRUE)
+source(paste0(ext, '/nrstats/R/graphs_survival.r'))
+env <- environment()
+
+# Upstream code relies on merge() row order (e.g. df$col[idx] <- ...), so sort
+# strings byte-wise, as SQLite does, on every platform.
+invisible(Sys.setlocale('LC_COLLATE', 'C'))
+# Plain-R stand-in for the two sqldf queries the upstream scripts run
+# (select [Key,] COUNT(*) as Name from tbl group by Key). sqldf's compiled
+# dependencies are blocked by Windows Smart App Control on some machines.
+sqldf <- function(q) {
+  m <- regmatches(q, regexec('(?i)select\\s+(?:(\\w+)\\s*,\\s*)?count\\(\\*\\)\\s+as\\s+(\\w+)\\s+from\\s+(\\w+)\\s+group\\s+by\\s+(\\w+)', q, perl = TRUE))[[1]]
+  if (length(m) == 0) stop('Unsupported sqldf query: ', q)
+  d <- get(m[4], envir = parent.frame())
+  tab <- table(d[[m[5]]])
+  res <- data.frame(as.vector(tab))
+  names(res) <- m[3]
+  if (nzchar(m[2])) res <- cbind(setNames(data.frame(names(tab), stringsAsFactors = FALSE), m[2]), res)
+  res
+}
+stext <- function(text, pos = 0, side = 3, ...) mtext(text, side = side, line = pos, cex = .7)
+# Compatibility replacement for old nrstats boxplot layout, preserving tests.
+tTestandGraph <- function(dat, groupCol, groups, valCol, groupLabels, tit = '', ...) {
+  d <- dat[dat[[groupCol]] %in% groups, , drop = FALSE]
+  d$Group <- factor(d[[groupCol]], levels = groups, labels = groupLabels)
+  a <- d[[valCol]][d$Group == groupLabels[1]]; b <- d[[valCol]][d$Group == groupLabels[2]]
+  cap <- sprintf('Welch t-test p=%.3g; Wilcoxon p=%.3g', t.test(a, b)$p.value, wilcox.test(a, b)$p.value)
+  ggplot(d, aes(Group, .data[[valCol]])) + geom_boxplot() + geom_point() + theme_bw() + labs(title = tit, caption = cap)
+}
+# Run an upstream script unchanged on disk: drop workspace clearing and package
+# loads we replace above, point PARENTDIR at the local copy, raise PNG resolution.
+run_original <- function(file) {
+  lines <- readLines(paste0(repo, file))
+  lines <- lines[!grepl('^rm\\(list|^library\\(nrstats\\)|^library\\(sqldf\\)', lines)]
+  lines[grepl('^PARENTDIR <-', lines)] <- paste0('PARENTDIR <- "', repo, '"')
+  lines <- gsub('png(', 'png(width=1800,height=1400,res=180, ', lines, fixed = TRUE)
+  invisible(capture.output(eval(parse(text = lines), envir = env)))
+}
+save_plot <- function(p, name, w = 10, h = 6) {
+  ggsave(paste0(out, name, '.png'), p, width = w, height = h, dpi = 300)
+  ggsave(paste0(out, name, '.pdf'), p, width = w, height = h)
+}
+resp <- function(x) factor(x, levels = c('PRCR', 'SD', 'PD'), labels = c('PR/CR', 'SD', 'PD'))
+```
+
+# Run the authors' exome scripts
+
+These are the authors' scripts, run unchanged apart from the in-memory adjustments above.
+Their original figures are copied to `wes/results/original_figures/`.
+
+```{r run-upstream}
+setwd(repo)
+run_original('exome/baseline_analysis.r')
+baseline <- ptdat
+run_original('exome/baseline_clonality.r')
+run_original('clonality_pre_post/clonality.analysis.R')
+invisible(file.copy(list.files(paste0(repo, 'output'), pattern = '^(Fig1B|Fig2|SupFig1).*\\.(pdf|png)$', full.names = TRUE),
+                    paste0(out, 'original_figures'), overwrite = TRUE))
+setwd(root)
+write.csv(baseline, paste0(out, 'baseline_patient_features.csv'), row.names = FALSE)
+write.csv(combdat, paste0(out, 'baseline_clonality_features.csv'), row.names = FALSE)
+```
+
+# Result 1: baseline mutation burden
+
+```{r baseline}
+baseline$Response <- resp(baseline$myBOR)
+table(baseline$Response)
+p <- ggplot(baseline, aes(Response, NonSynMut, color = Response)) +
+  geom_boxplot(outlier.shape = NA) + geom_point(position = position_jitter(width = .12, seed = 38), size = 2) +
+  facet_wrap(~Cohort) + scale_y_log10() + theme_bw(base_size = 16) + theme(legend.position = 'none') +
+  labs(title = 'Baseline mutation counts by clinical response', y = 'Nonsynonymous mutation count (log scale)', x = NULL,
+       caption = 'Available baseline WES cohort; prior-ipilimumab cohorts shown separately.')
+save_plot(p, '01_baseline_mutations_by_response')
+p
+```
+
+# Result 2: mutations tracked between the two biopsies
+
+Each mutation's cancer cell fraction (the share of cancer cells carrying it, adjusted for tumor
+purity) is compared between biopsies. Using the authors' categories at a 0.95 threshold, a
+mutation **contracts** (lost, or now in fewer cancer cells), **persists**, or **expands**.
+
+```{r contraction}
+changed <- update.ccf(dd, 'pyclone', .95, TRUE)
+counts <- as.data.frame.matrix(table(changed$sample, changed$clonal2))
+counts$Patient <- rownames(counts); counts$Response <- class[counts$Patient]
+counts$Total <- rowSums(counts[, c('negative selection', 'no selection', 'positive selection')])
+counts$Contraction_fraction <- counts[['negative selection']] / counts$Total
+write.csv(counts, paste0(out, 'paired_mutation_features.csv'), row.names = FALSE)
+
+long <- as.data.frame(table(changed$sample, changed$clonal2)); names(long) <- c('Patient', 'Category', 'Count')
+long$Response <- resp(class[as.character(long$Patient)])
+p <- ggplot(long, aes(Patient, Count, fill = Category)) + geom_col(position = 'fill') +
+  facet_grid(~Response, scales = 'free_x', space = 'free_x') +
+  scale_fill_manual(values = c('#277DA8', '#BBBBBB', '#E59845'), labels = c('Contraction', 'Persistence', 'Expansion')) +
+  theme_bw(base_size = 14) + theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = 'bottom') +
+  labs(title = 'Mutation changes during nivolumab treatment', y = 'Fraction of classified mutations', x = 'Patient', fill = NULL,
+       caption = 'Authors CCF categories and 0.95 threshold; categories alone do not establish selection mechanisms.')
+save_plot(p, '02_mutation_changes_per_patient', 12, 6)
+p
+```
+
+```{r contraction-box}
+counts$Response <- resp(counts$Response)
+table(counts$Response)
+p <- ggplot(counts, aes(Response, Contraction_fraction, color = Response)) +
+  geom_boxplot(outlier.shape = NA) + geom_point(position = position_jitter(width = .12, seed = 38), size = 2) +
+  theme_bw(base_size = 16) + theme(legend.position = 'none') +
+  labs(title = 'Mutation contraction by clinical response', x = NULL, y = 'Fraction of mutations classified as contracting',
+       caption = 'Each point is one patient with paired WES data.')
+save_plot(p, '03_contraction_by_response')
+p
+```
+
+# Result 3: neoantigens observed versus expected
+
+Expected on-treatment neoantigens use silent mutations as the yardstick, since T cells cannot
+see them: `E_NeoAgCnt_On = SynMutCnt_On × NeoAgCnt_Pre / SynMutCnt_Pre`. A ratio below 1 means
+fewer neoantigens remain than if they had survived at the same rate as silent mutations.
+
+```{r neoantigen, fig.height = 7}
+neo <- read.csv(paste0(repo, 'neoantigen depletion/Mut_NeoAg_Expected_vs_Observed_BMS038.csv'))
+stopifnot(all(neo$E_NeoAgCnt_On > 0))
+neo$Observed_expected_ratio <- neo$NeoAgCnt_On / neo$E_NeoAgCnt_On
+write.csv(neo, paste0(out, 'neoantigen_patient_features.csv'), row.names = FALSE)
+# Authors' original plot, saved to PDF
+setwd(paste0(repo, 'neoantigen depletion'))
+pdf(paste0(out, 'original_figures/neoantigen_observed_expected.pdf'), width = 12, height = 7)
+lines <- readLines('ObsvsExpt_NeoAg.R'); eval(parse(text = lines[!grepl('^rm\\(list', lines)])); invisible(dev.off())
+setwd(root)
+
+neo$Response <- resp(neo$myBOR)
+p <- ggplot(neo, aes(reorder(Patient, Observed_expected_ratio), Observed_expected_ratio, color = Response)) +
+  geom_hline(yintercept = 1, linetype = 2) + geom_point(size = 3) + coord_flip() + theme_bw(base_size = 14) +
+  labs(title = 'Observed versus expected on-treatment neoantigens', x = 'Patient', y = 'Observed / expected neoantigen count',
+       caption = 'Below 1: fewer candidates than expected under the authors model; not a baseline-loss fraction.')
+save_plot(p, '04_neoantigen_observed_expected', 10, 8)
+p
+```
+
+# Confidence intervals and tests
+
+Percentile bootstrap 95% CIs for each group median and for the PR/CR − PD difference
+(10,000 resamples, seed 2017). Wilcoxon rank-sum tests compare PR/CR with PD only; these are
+exploratory, given the small groups.
+
+```{r bootstrap}
+set.seed(2017)
+B <- 10000
+boot_med <- function(x) quantile(replicate(B, median(sample(x, replace = TRUE))), c(.025, .975))
+boot_diff <- function(a, b) quantile(replicate(B, median(sample(a, replace = TRUE)) - median(sample(b, replace = TRUE))), c(.025, .975))
+summarise <- function(val, grp, label) {
+  rows <- lapply(c('PR/CR', 'SD', 'PD'), function(g) {
+    x <- val[grp == g]; ci <- boot_med(x)
+    data.frame(measure = label, group = g, n = length(x), median = median(x), lo = ci[1], hi = ci[2])
+  })
+  a <- val[grp == 'PR/CR']; b <- val[grp == 'PD']; ci <- boot_diff(a, b)
+  rbind(do.call(rbind, rows),
+        data.frame(measure = label, group = 'PR/CR minus PD', n = NA, median = median(a) - median(b), lo = ci[1], hi = ci[2]))
+}
+b <- baseline[!is.na(baseline$NonSynMut), ]
+res <- rbind(summarise(b$NonSynMut, b$Response, 'baseline_nonsyn_mutations'),
+             summarise(counts$Contraction_fraction, counts$Response, 'contraction_fraction'),
+             summarise(neo$Observed_expected_ratio, neo$Response, 'neoantigen_obs_exp_ratio'))
+rownames(res) <- NULL
+write.csv(res, paste0(out, 'bootstrap_median_ci.csv'), row.names = FALSE)
+knitr::kable(res, digits = 3)
+
+wil <- function(v, g) signif(wilcox.test(v[g == 'PR/CR'], v[g == 'PD'])$p.value, 3)
+data.frame(measure = c('baseline_nonsyn_mutations', 'contraction_fraction', 'neoantigen_obs_exp_ratio'),
+           wilcoxon_p_PRCR_vs_PD = c(wil(b$NonSynMut, b$Response), wil(counts$Contraction_fraction, counts$Response),
+                                     wil(neo$Observed_expected_ratio, neo$Response)))
+```
+
+# Patients shared across WES, RNA and TCR
+
+For the group's integration: patients with all three data types at both timepoints.
+
+```{r shared}
+availability <- read.csv(paste0(repo, 'data/genomic_data_per_case.csv'))
+shared <- availability[apply(availability[, -1], 1, function(x) all(!is.na(x) & x == 1)), ]
+write.csv(shared, paste0(out, 'all_modality_paired_patient_ids.csv'), row.names = FALSE)
+cat('Baseline WES:', nrow(baseline), ' Paired WES:', nrow(counts), ' Neoantigen:', nrow(neo), ' All three, both timepoints:', nrow(shared), '\n')
+```
+
+# Summary
+
+- **Baseline burden is a weak predictor.** Median nonsynonymous mutations are similar across
+  groups, and the PR/CR − PD difference has a confidence interval that crosses zero.
+- **Responders lose most of their mutations.** The median share of mutations contracting is far
+  higher in PR/CR than in PD.
+- **Responders keep fewer neoantigens than expected.** Their observed/expected ratio sits well
+  below 1, while progressors stay near 1. This fits T cells removing the cancer cells that
+  display neoantigens.
+
+# Limitations
+
+- Reproduces the analysis from the authors' processed data; mutations and neoantigens were not
+  re-called from raw reads.
+- "Contraction" includes mutations that went from clonal to subclonal, not only those that disappeared.
+- More immune cells in an on-treatment biopsy can make mutations look lost. Cancer cell fractions
+  adjust for purity, but low purity and read depth remain caveats.
+- Groups are small, and the on-treatment biopsy is a single snapshot at about week 4.
+- Figures use all patients with paired WES (41), not only the 26 shared across all three data types.
+
+# Session info
+
+```{r session}
+writeLines(capture.output(sessionInfo()), paste0(out, 'R_session_info.txt'))
+sessionInfo()
+```
