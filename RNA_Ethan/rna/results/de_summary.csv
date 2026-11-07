@@ -1,0 +1,8 @@
+contrast,genes_tested,fdr_0.1,fdr_0.2
+A_pre_PRCR_vs_PD,19196,223,460
+B_on_vs_pre_paired,15023,44,227
+C_on_vs_pre_PRCR,17680,3582,5629
+C_on_vs_pre_SD,15782,28,88
+C_on_vs_pre_PD,19578,0,0
+C_on_vs_pre_PRCR_vs_PD,16921,1721,3479
+D_on_vs_pre_benefit_vs_none,19578,6,7

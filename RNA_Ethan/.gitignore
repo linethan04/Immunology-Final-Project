@@ -1,0 +1,11 @@
+# Cached DESeq2 fits; rebuilt by rna/run_rna.R
+rna/results/cache/
+
+# R session and plotting leftovers
+.Rhistory
+.RData
+.Rproj.user/
+Rplots.pdf
+
+# Office lock files
+~$*

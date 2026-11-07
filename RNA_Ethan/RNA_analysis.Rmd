@@ -1,0 +1,166 @@
+---
+title: "Bulk RNA-seq in nivolumab-treated melanoma: a reanalysis of Riaz et al. (2017)"
+author: "Ethan (RNA lead) · Group: Krithika (TCR), Ethan (RNA), Kwaku (WES)"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, results = "hide")
+source("rna/common.R")
+show_tab <- function(f) read_csv(file.path(out, f), show_col_types = FALSE)
+show_fig <- function(f) knitr::include_graphics(file.path(out, paste0(f, ".png")))
+```
+
+**Analysis by:** Ethan (bulk RNA sequencing).
+**Source:** Riaz et al., *Cell* 2017, [DOI 10.1016/j.cell.2017.09.028](https://doi.org/10.1016/j.cell.2017.09.028);
+processed data from [riazn/bms038_analysis](https://github.com/riazn/bms038_analysis), in the repository's `data/` folder.
+
+# Background
+
+**Nivolumab** blocks PD-1, a brake on T cells. It works in only some melanoma patients.
+Kwaku's exome analysis asks whether tumors lose their mutations when it works. This analysis asks
+the matching question for gene expression.
+
+**Bulk RNA-seq** counts the RNA reads from each gene across all cells in a biopsy, so it reads out
+both the immune response and the tumor. We compare biopsies from before treatment and about 4 weeks
+in, across PR/CR (partial or complete response), SD (stable disease) and PD (progressive disease).
+
+**Question:** what changes in gene expression on nivolumab, and is the change specific to responders?
+
+# Workflow
+
+All code is in `rna/`. Each chunk below runs one script. Code is folded; use the **Code** buttons to read it.
+The first run takes about 20 minutes because of DESeq2; later runs reuse `rna/results/cache/`.
+
+## Step 1: counts, filtering and normalization
+
+Read the raw counts, take each patient's ID from the sample name (the table's `PatientID` mislabels
+Pt7_Pre as Pt72), keep genes with at least 10 reads in at least 5 samples, and apply DESeq2's
+variance-stabilizing transform (VST).
+
+```{r step1, code = readLines("rna/01_preprocess_qc.R")}
+```
+
+## Step 2: differential expression
+
+Negative-binomial models in DESeq2: baseline PR/CR vs PD; On vs Pre with each patient as their own
+control; and On vs Pre within each response group, with a formal test of whether the change differs
+between groups.
+
+```{r step2, code = readLines("rna/02_differential_expression.R")}
+```
+
+## Step 3: pathways
+
+Genes ranked by the DESeq2 statistic, then tested with fgsea against the MSigDB Hallmark sets.
+
+```{r step3, code = readLines("rna/03_gsea.R")}
+```
+
+## Step 4: signature scores and patient table
+
+Each score is the mean z-scored expression of marker genes. `rna_patient_features.csv` is the table
+for the group's integration.
+
+```{r step4, code = readLines("rna/04_signatures.R")}
+```
+
+## Step 5: links to WES, TCR and outcome
+
+```{r step5, code = readLines("rna/05_clinical_links.R")}
+```
+
+## Confidence intervals and checks
+
+Percentile bootstrap 95% CIs for each group median and for the PR/CR − PD difference (10,000
+resamples, seed 2017, the same as the WES analysis). Wilcoxon tests compare PR/CR with PD only.
+
+```{r ci, code = readLines("rna/rna_bootstrap_ci.R")}
+```
+
+## Comparison with the paper
+
+```{r paper, code = readLines("rna/paper_comparison.R")}
+```
+
+# Result 1: baseline immune activity
+
+The RNA counterpart of baseline mutation burden. The T-cell-inflamed score overlaps across groups,
+and the PR/CR − PD interval crosses zero. Responders who had progressed on ipilimumab sit high, which
+matches the "hot tumor" pattern the paper reports for that cohort.
+
+```{r fig1, echo = FALSE, results = "markup"}
+show_fig("01_baseline_immune_by_response")
+```
+
+# Result 2: gene changes between biopsies
+
+Responders change somewhat more genes, but the larger difference is consistency: DESeq2 finds many
+genes shifting together in PR/CR and almost none in SD or PD.
+
+```{r fig2, echo = FALSE, results = "markup"}
+show_fig("02_gene_changes_per_patient")
+knitr::kable(show_tab("de_summary.csv"), caption = "Significant genes per contrast")
+```
+
+# Result 3: tumor and immune change in each patient
+
+The tumor score falls sharply in responders. The CD8 score rises in PR/CR and SD alike, so immune
+activation by itself is not specific to tumor shrinkage.
+
+```{r fig3, echo = FALSE, results = "markup"}
+show_fig("03_tumor_immune_change_per_patient")
+```
+
+# Result 4: pathways
+
+Immune pathways rise in all groups. Proliferation falls in responders and mostly rises in progressors.
+
+```{r fig4, echo = FALSE, results = "markup"}
+show_fig("04_pathways_by_response")
+```
+
+# Result 5: agreement with WES and TCR
+
+The RNA tumor score tracks Kwaku's mutation contraction, and the RNA CD8 score tracks the T-cell
+fraction from TCR-seq.
+
+```{r fig5, echo = FALSE, results = "markup"}
+show_fig("05_rna_vs_wes_tcr")
+knitr::kable(show_tab("cross_modality_correlations.csv"), digits = 3, caption = "Spearman correlations")
+```
+
+# Tables of effect sizes
+
+```{r tables, echo = FALSE, results = "markup"}
+knitr::kable(show_tab("bootstrap_median_ci.csv"), digits = 3, caption = "Group medians with bootstrap 95% CIs")
+knitr::kable(show_tab("wilcoxon_PRCR_vs_PD.csv"), digits = 4, caption = "Wilcoxon PR/CR vs PD: all patients, shared patients, and without Pt3")
+knitr::kable(show_tab("dilution_check.csv"), digits = 3, caption = "PR/CR effect on CD8, before and after adjusting for tumor score")
+knitr::kable(show_tab("paper_comparison.csv"), caption = "Significant genes at FDR/q < 0.2: paper vs this R and DESeq2")
+```
+
+# Summary
+
+- **Baseline immune activity is a weak predictor** at the level of patient scores, though immune pathways lean higher in responders.
+- **Tumor loss is what marks a response.** Melanoma and proliferation programs fall in PR/CR, and the tumor score tracks WES contraction.
+- **Immune activation is not enough.** Immune pathways rise in every group, including patients whose tumors do not shrink. The on-treatment CD8 level does separate PR/CR from PD, and it survives adjustment for tumor score.
+
+# Limitations
+
+- Bulk RNA is a mixture. Tumor loss raises the share of every other cell type, and the responder CD8 *rise* cannot be separated from this dilution. The on-treatment CD8 *level* holds up.
+- Response is defined by tumor shrinkage, so the tumor score partly restates the outcome.
+- The paper's gene counts were not reproduced (see table). The authors used DESeq2 1.12.4 and, for Table S6A, IHW, and there is no public script for their Table S6D. The biological direction agrees.
+- The paper removed Pt3 as an outlier, though the authors' public scripts keep it. We keep it and report the tests without it.
+- Enrichment p-values are optimistic because genes in a pathway are correlated. Read the direction and pattern.
+- Groups are small and each biopsy is one snapshot. Figures use all 42 patients with paired RNA, not only the 26 shared across all three data types.
+
+# Session info
+
+```{r session, results = "markup"}
+sessionInfo()
+```

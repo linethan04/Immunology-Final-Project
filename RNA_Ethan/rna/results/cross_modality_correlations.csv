@@ -1,0 +1,9 @@
+comparison,rho,p,n
+"RNA CD8 vs TCR T-cell fraction, Pre",0.8070953681745432,1.2273993753181515e-7,29
+"RNA CD8 vs TCR T-cell fraction, On",0.8762795054504636,2.2279813546676733e-10,30
+Change in cytotoxic score vs change in TCR clonality,0.27093596059113295,0.16315502113222793,28
+Change in tumor score vs WES contraction,-0.6946153846153846,1.1684134330531795e-4,25
+"Change in tumor score vs WES contraction, excluding PR/CR",-0.5005159958720331,0.0343837791763591,18
+Change in CD8 score vs WES contraction,0.06230769230769231,0.7673245235239029,25
+Change in tumor score vs neoantigen observed/expected,0.28043855106182575,0.17451499739311432,25
+Baseline immune score vs mutation burden,0.14447302591865185,0.349449089549113,44
